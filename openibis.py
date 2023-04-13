@@ -1,15 +1,8 @@
-
-
-# PYTHON IMPLEMENTATIO OF IBIZ ALGORITHM
-# Base on the code Open Reimplementation of the BIS Algorithms for Depth of Anesthesia
-
-# Autho python code: Gabriela Vargas
-
 import numpy as np
-from scipy import stats, signal, ndimage
-from scipy.fft import fft, fftshift
-from scipy.signal import butter, blackman, convolve
-from scipy.stats import trim_mean
+import scipy.signal as signal
+from scipy.fft import fft
+from scipy import stats
+import pandas as pd
 
 
 def openibis(eeg):
@@ -33,7 +26,7 @@ def suppression(eeg, Fs, stride):
     '''
     This function calculates the Burst Suppression Ratio (BSR) and the BSR map.
     '''
-    N, nStride = n_epochs(eeg, Fs, stride)
+    N, nStride = nEpochs(eeg, Fs, stride)
     BSRmap = np.zeros((int(N), 1))
     for n in range(N):
         x = segment(eeg, n + 6.5, 2, nStride)
@@ -42,104 +35,32 @@ def suppression(eeg, Fs, stride):
     return BSRmap, BSR
 
 
+
 def logPowerRatios(eeg, Fs, stride, BSRmap):
-    
-    '''
-    
-    This function calculates the three components of the depth of anesthesia based on log power ratios of the EEG signal.
+    N, nStride = nEpochs(eeg, Fs, stride)
+    B, A = signal.butter(2, 0.65 / (Fs / 2), 'high')
+    eegHiPassFiltered = signal.lfilter(B, A, eeg)
+    psd = np.empty((N, 4 * int(nStride // 2)))
+    assert nStride // 2 == int(nStride // 2)
+    psd[:] = np.nan
+    suppressionFilter = np.piecewise(np.arange(0, 64, 0.5), [np.arange(0, 64, 0.5) < 3, np.arange(0, 64, 0.5) < 6], [0, 0.25, 1]) ** 2
+    components = np.empty((N, 3))
+    components[:] = np.nan
 
-    THIS FUNCTION ASSUMES 1 CHANNEL or the average between channels
-
-    '''
-    
-    # Define Constants
-    cutoff = 0.65
-    nyq = Fs / 2
-    normalized_cutoff = cutoff / nyq
-
-   # Compute number of epochs and stride size
-    num_epochs, nStride = n_epochs(eeg, Fs, stride)
-
-    # Butterworth filter at 0.65 Hz 
-    b, a = signal.butter(2, normalized_cutoff, 'high') 
-
-    # Add padding to input signal 
-    padlen = 9 # TASK: Padlen=? IN OTHER SUBJECTS
-    eeg_padded = np.pad(eeg, (padlen, padlen), mode='edge')
-    # Apply filter with padding
-    eegHiPassFiltered_padded = signal.filtfilt(b, a, eeg_padded)
-    # Remove padding from filtered signal
-    eegHiPassFiltered = eegHiPassFiltered_padded[padlen:-padlen] # Filter out very-low frequency from the input EEG
-
-
-    psd = np.full((num_epochs, int(4 * nStride/2)), np.nan) #  to store the Power Spectral Density each epoch
-
-    # frequency vector for filter design
-    f = np.linspace(0,  nyq, 64)  
-    # Suppression filter
-    suppressionFilter = np.piecewise(f,
-                                     [f < 0, (f >= 0) & (f < 3), (f >= 3) & (f <= 6)],
-                                     [0, 0.25, 1])**2   
-    
-    #List for the 3 components for each epoch
-    components = np.full((num_epochs, 3), np.nan) 
-
-
-    # FOR LOOP
-    for n in range(num_epochs):
-        # If the BSR is not suppressed enter the loop: HERE ADDED the 'not' to the function
-        if not(isNotBurstSupppressed(BSRmap, n, 4)): 
-
-            # Compute the PSD for each epoch
-            psd[n,:] = powerSpectralDensity(segment(eegHiPassFiltered, n+4, 4, nStride)) # THIS ASSUMES 1 CHANNEL
-
-
-            if sawtoothDetector(segment(eeg, n+4, 4, nStride), nStride):
+    for n in range(N):
+        if isNotBurstSuppressed(BSRmap, n, 4):
+            psd[n, :] = powerSpectralDensity(segment(eegHiPassFiltered, n + 4, 4, nStride))
+            if sawtoothDetector(segment(eeg, n + 4, 4, nStride), nStride):
                 psd[n, :] = suppressionFilter * psd[n, :]
 
-
-        thirtySec = timeRange(30, n, stride) # Consider the data from the last 30 seconds
-
-        if len(thirtySec) > 0:
-
-            vhighPowerConc = np.sqrt(
-                            np.mean(
-                            np.multiply(
-
-                                psd[ thirtySec, :][:, band_range(39.5, 46.5, 0.5).astype(int)] , 
-
-                                psd[thirtySec,:][:, band_range(40, 47, 0.5).astype(int)]
-                                )
-                                    , axis=0 )
-                                    )           
-            
-            wholePowerConc = np.sqrt (
-                                np.mean( 
-                                np.multiply( 
-                                    psd[thirtySec ,:][:, band_range(0.5, 46.5, 0.5).astype(int)] , 
-                                    psd[thirtySec,:][:, band_range(1, 47, 0.5).astype(int)] 
-                                    ), 
-                                        axis=0)
-                                        )            
-            
-            midBandPower   = prctmean( 
-                                np.nanmean(
-                                    10 * np.log10( 
-                                    psd[thirtySec,:][:, band_range(11, 20, 0.5)] 
-                                    ), 
-                                    axis=0 ), 
-                                50, 100) # Mean power in the mid-band (11-20 Hz)
-            
-            components[n, 0] = mean_band_power(
-                                psd[thirtySec], 30, 47, 0.5
-                                ) - midBandPower #Component 1 is , use for sedation in General Anesthesia
-            
-            print(vhighPowerConc, wholePowerConc, np.shape(vhighPowerConc), np.shape(wholePowerConc))
-            divpowers = np.divide(vhighPowerConc, wholePowerConc) 
-
-            components[n, 1] = stats.trim_mean( 10 * np.log10( divpowers ), 50) # Component 2 is , use for general in General Anesthesia
-            
-            components[n, 2] = mean_band_power(psd[thirtySec], 0.5, 4, 0.5) - midBandPower # Component 3: Weighting between Comp1 y and Comp2
+        thirtySec = timeRange(30, n, stride)
+        vhighPowerConc = np.sqrt(np.mean(psd[thirtySec, :][:, bandRange(39.5, 46.5, 0.5)] * psd[thirtySec, :][:, bandRange(40, 47, 0.5)], axis=1))
+        wholePowerConc = np.sqrt(np.mean(psd[thirtySec, :][:, bandRange(0.5, 46.5, 0.5)] * psd[thirtySec, :][:, bandRange(1, 47, 0.5)], axis=1))
+        midBandPower = prctmean(np.nanmean(10 * np.log10(psd[thirtySec, :][:, bandRange(11, 20, 0.5)]), axis=1), 50, 100)
+        
+        components[n, 0] = meanBandPower(psd[thirtySec, :], 30, 47, 0.5) - midBandPower
+        components[n, 1] = stats.trim_mean( 10 * np.log10( vhighPowerConc / wholePowerConc ), 0.5)
+        components[n, 2] = meanBandPower(psd[thirtySec, :], 0.5, 4, 0.5) - midBandPower
 
     return components
 
@@ -173,17 +94,24 @@ def sawtoothDetector(eeg, n_stride):
     This function detects sawtooth waves in an EEG signal
 
     """
-
+    assert int(n_stride) == n_stride
+    n_stride = int(n_stride)
+    
+    
     saw = np.hstack((np.zeros(n_stride - 5), np.arange(1, 6)))
 
     saw = (saw - np.mean(saw)) / np.std(saw, ddof=1)
 
     r = np.arange(len(eeg) - len(saw))
     v = np.apply_along_axis(lambda x: np.var(x), 0, np.lib.stride_tricks.as_strided(eeg, (len(eeg) - len(saw) + 1, len(saw)))) # moving window variance
-    m = ((convolve(eeg, np.flipud(saw), mode='valid') + convolve(eeg, saw, mode='valid')) / len(saw))**2
+    m = (np.array([np.convolve(eeg, np.flipud(saw), mode='valid'), np.convolve(eeg, saw, mode='valid')]) / len(saw))**2
+    m = m.T # Transpose 
+    
+    
     y = np.max([(v > 10) * m[:len(v), 0] / v, (v > 10) * m[:len(v), 1] / v], axis=0) > 0.63
 
     return np.array(y)
+
 
 
 def mixer(components, BSR): 
@@ -243,7 +171,7 @@ def mixer(components, BSR):
 
 #### Helper functions
 
-def n_epochs(eeg, Fs, stride):
+def nEpochs(eeg, Fs, stride):
     '''
     Calculates the number of epochs and the stride length based on the sampling frequency and a desired stride
     '''
@@ -253,13 +181,13 @@ def n_epochs(eeg, Fs, stride):
     return int(N), nStride
 
 # meanBandPower: calculates the mean power in a frequency band of a power spectral density
-def mean_band_power(psd, from_, to, bins):
+def meanBandPower(psd, from_, to, bins):
 
-    v = psd[:, band_range(from_, to, bins)]
+    v = psd[:, bandRange(from_, to, bins)]
 
     return np.mean(10 * np.log10 (v[~np.isnan(v)]),  dtype=int)
 
-def band_range(from_, to, bins):
+def bandRange(from_, to, bins):
     """
     Generatesthe indices of bins for a given frequency band
     """
@@ -304,9 +232,9 @@ def segment(eeg, from_, number, nStride):
 
 
 
-def isNotBurstSupppressed(BSRmap, n, p):
+def isNotBurstSuppressed(BSRmap, n, p):
     '''
-    isNotBurstSupppressed: checks if a given index is NOT in a burst-suppressed region
+    isNotBurstSuppressed: checks if a given index is NOT in a burst-suppressed region
     n: number of epochs
     p: 4; fixed parameter   
     '''
@@ -354,3 +282,14 @@ def piecewise(x, xp, yp):
     '''
 
     return np.interp(np.clip(x, xp[0], xp[-1]), xp, yp)
+
+
+if __name__ == '__main__':
+    import os; os.system('clear')
+    import mat73
+    eeg = mat73.loadmat('data/case1.mat')['EEG']
+    
+    print(eeg.shape, type(eeg))
+    
+    openibis(eeg)
+
