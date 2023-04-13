@@ -17,7 +17,9 @@ git clone https://github.com/galadriana/openibis.git
 cd openibis
 ```
 
-All the files neccesary for the Matlab (`openibis.m`) and Python (`openibis.py`) versions are contained in one script each.
+All the files neccesary for the Matlab (`openibis.m`) and Python (`openibis.py`) versions are contained in one script each. The python version is still in development, but the Matlab version is fully functional.
+
+
 
 
 
