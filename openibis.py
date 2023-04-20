@@ -50,7 +50,7 @@ def logPowerRatios(eeg, Fs, stride, BSRmap):
     for n in range(N):
         if isNotBurstSuppressed(BSRmap, n, 4):
             psd[n, :] = powerSpectralDensity(segment(eegHiPassFiltered, n + 4, 4, nStride))
-            if sawtoothDetector(segment(eeg, n + 4, 4, nStride), nStride):
+            if not(sawtoothDetector(segment(eeg, n + 4, 4, nStride), nStride)[0]):
                 psd[n, :] = suppressionFilter * psd[n, :]
 
         thirtySec = timeRange(30, n, stride)
@@ -150,7 +150,7 @@ def mixer(components, BSR):
                                  [0.5, 1] ) * (generalScore < sedationScore) 
     
     bsrWeight = np.piecewise(BSR,
-                         [x < 10, x >= 50],
+                         [BSR < 10, BSR >= 50],
                          [0, 1])
     
     x = sedationScore * (1 - generalWeight) + generalScore * generalWeight
